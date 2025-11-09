@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>CQB Shooter — Weapon Menu (Press E)</title>
+<style>
+  :root{
+    --bg:#111;
+    --panel:rgba(0,0,0,0.6);
+    --accent:#0f0;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:#fff;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  canvas{display:block}
+  #menu {
+    position: absolute;
+    top:0;left:0;width:100%;height:100%;
+    display:flex;flex-direction:column;justify-content:center;align-items:center;
+    background: radial-gradient(circle, #111 40%, #000 100%);
+    z-index: 30;
+  }
+  #menu h1{font-size:48px;margin:0 0 20px;color:var(--accent);text-shadow:0 0 8px var(--accent)}
+  #menu button{background:var(--accent);border:none;color:#000;padding:12px 32px;font-size:18px;border-radius:10px;cursor:pointer}
+  #hud{
+    position:absolute; left:12px; top:12px; z-index:20;
+    background:var(--panel); padding:8px 10px; border-radius:8px;
+    display:flex;gap:12px; align-items:center;
+  }
+  #weaponBtn{
+    background:transparent; border:1px solid rgba(255,255,255,0.06); color:#fff; padding:6px 10px; border-radius:6px; cursor:pointer;
+  }
+
+  /* Weapon popup */
+  #weaponOverlay{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:520px; max-width:92%; background:linear-gradient(#111,#0b0b0b);
+    border-radius:12px; padding:18px; box-shadow:0 8px 30px rgba(0,0,0,0.7);
+    z-index:40; display:none;
+  }
+  #weaponOverlay h2{margin:0 0 12px;color:var(--accent)}
+  .weaponList{display:flex; gap:10px; flex-wrap:wrap}
+  .weaponCard{
+    flex:1 1 150px; min-width:140px;
+    background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; cursor:pointer;
+    border:2px solid transparent; transition:transform .08s, border-color .12s, background .12s;
+  }
+  .weaponCard:hover{transform:translateY(-4px); background: rgba(255,255,255,0.04)}
+  .weaponCard.active{border-color:var(--accent); box-shadow:0 6px 18px rgba(0,255,0,0.06)}
+  .weaponName{font-weight:700;margin-bottom:6px}
+  .weaponStat{font-size:13px;color:#cfcfcf;margin:2px 0}
+  #closeWeapons{margin-top:12px; background:var(--accent); border:none; padding:10px 14px; color:#000; border-radius:8px; cursor:pointer}
+
+  /* small help note */
+  #helpNote{position:absolute; right:12px; top:12px; font-size:13px; color:#ddd; opacity:0.9}
+</style>
+</head>
+<body>
+  <div id="menu">
+    <h1>CQB SHOOTER</h1>
+    <button id="startBtn">Start Game</button>
+  </div>
+
+  <div id="hud" style="display:none">
+    <div>Score: <span id="score">0</span></div>
+    <div id="currentWeapon" style="font-weight:700">Weapon: Pistol</div>
+    <button id="weaponBtn" title="Open weapon menu (E)">Weapons (E)</button>
+  </div>
+
+  <div id="helpNote" style="display:none">Move: WASD • Aim: Mouse • Shoot: Click • Open weapons: E</div>
+
+  <canvas id="gameCanvas" style="display:none"></canvas>
+
+  <!-- Weapon selection overlay (in-game) -->
+  <div id="weaponOverlay" aria-hidden="true">
+    <h2>Choose Your Weapon</h2>
+    <div class="weaponList" id="weaponList"></div>
+    <button id="closeWeapons">Equip & Close (E)</button>
+  </div>
+
+<script>
+/* =========================
+   Setup + Globals
+   ========================= */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+function resizeAll(){
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  fogCanvas.width = canvas.width;
+  fogCanvas.height = canvas.height;
+}
+window.addEventListener('resize', resizeAll);
+
+const fogCanvas = document.createElement('canvas');
+const fogCtx = fogCanvas.getContext('2d');
+
+/* Player */
+const player = { x: 400, y: 300, radius: 20, speed: 4 };
+
+/* Bullets */
+const bullets = [];
+
+/* Walls */
+const walls = [
+  { x: 200, y: 150, w: 300, h: 20 },
+  { x: 600, y: 400, w: 20, h: 300 },
+  { x: 400, y: 600, w: 300, h: 20 },
+  { x: 800, y: 200, w: 20, h: 300 }
+];
+
+/* Basic input */
+const keys = {};
+let mouseX = 0, mouseY = 0, mouseDown = false;
+document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+document.addEventListener('mousedown', () => mouseDown = true);
+document.addEventListener('mouseup', () => mouseDown = false);
+
+/* HUD + UI elements */
+const hud = document.getElementById('hud');
+const startBtn = document.getElementById('startBtn');
+const menu = document.getElementById('menu');
+const scoreEl = document.getElementById('score');
+const weaponBtn = document.getElementById('weaponBtn');
+const weaponOverlay = document.getElementById('weaponOverlay');
+const weaponListEl = document.getElementById('weaponList');
+const closeWeaponsBtn = document.getElementById('closeWeapons');
+const currentWeaponLabel = document.getElementById('currentWeapon');
+const helpNote = document.getElementById('helpNote');
+
+/* Mouse tracking inside canvas (will be added after start) */
+function attachMouse() {
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+  });
+  canvas.addEventListener('click', onPrimaryFire);
+}
+
+/* =========================
+   Weapons
+   ========================= */
+const weapons = {
+  pistol: {
+    id: 'pistol',
+    name: 'Pistol',
+    damage: 1,
+    bulletSpeed: 12,
+    fireRate: 250, // ms between shots
+    bulletsPerShot: 1,
+    spread: 0,
+    auto: false
+  },
+  shotgun: {
+    id: 'shotgun',
+    name: 'Shotgun',
+    damage: 1,
+    bulletSpeed: 11,
+    fireRate: 800,
+    bulletsPerShot: 6,
+    spread: 0.6, // radians total
+    auto: false
+  },
+  smg: {
+    id: 'smg',
+    name: 'SMG',
+    damage: 1,
+    bulletSpeed: 14,
+    fireRate: 80,
+    bulletsPerShot: 1,
+    spread: 0.06,
+    auto: true
+  }
+};
+
+let currentWeapon = weapons.pistol;
+let lastShotTime = 0;
+
+/* Build weapon overlay UI */
+function buildWeaponUI(){
+  weaponListEl.innerHTML = '';
+  for(const key in weapons){
+    const w = weapons[key];
+    const card = document.createElement('div');
+    card.className = 'weaponCard' + (w.id === currentWeapon.id ? ' active' : '');
+    card.dataset.weapon = w.id;
+    card.innerHTML = `
+      <div class="weaponName">${w.name}</div>
+      <div class="weaponStat">Fire rate: ${w.fireRate} ms</div>
+      <div class="weaponStat">Bullets/shot: ${w.bulletsPerShot}</div>
+      <div class="weaponStat">Speed: ${w.bulletSpeed}</div>
+      <div class="weaponStat">Spread: ${w.spread}</div>
+      <div style="margin-top:6px;color:#bdbdbd;font-size:12px">${w.auto? 'Auto':'Semi-auto'}</div>
+    `;
+    card.addEventListener('click', () => {
+      selectWeapon(w.id);
+    });
+    weaponListEl.appendChild(card);
+  }
+}
+function selectWeapon(id){
+  if(!weapons[id]) return;
+  currentWeapon = weapons[id];
+  lastShotTime = 0;
+  currentWeaponLabel.textContent = `Weapon: ${currentWeapon.name}`;
+  // refresh UI highlight
+  Array.from(document.querySelectorAll('.weaponCard')).forEach(c => c.classList.toggle('active', c.dataset.weapon === id));
+}
+
+/* =========================
+   Fire handling
+   ========================= */
+function fireWeapon() {
+  const now = performance.now();
+  if (now - lastShotTime < currentWeapon.fireRate) return;
+  lastShotTime = now;
+
+  const baseAngle = Math.atan2(mouseY - player.y, mouseX - player.x);
+
+  // spawn bulletsPerShot bullets with spread
+  const count = currentWeapon.bulletsPerShot;
+  if (count === 1) {
+    const angle = baseAngle + (Math.random() - 0.5) * currentWeapon.spread;
+    bullets.push({
+      x: player.x + Math.cos(angle) * 28,
+      y: player.y + Math.sin(angle) * 28,
+      dx: Math.cos(angle) * currentWeapon.bulletSpeed,
+      dy: Math.sin(angle) * currentWeapon.bulletSpeed,
+      radius: 5,
+      damage: currentWeapon.damage
+    });
+  } else {
+    // shotgun-like spread: distribute angles across spread
+    for (let i=0;i<count;i++){
+      const t = (count===1) ? 0.5 : i/(count-1);
+      const off = (t - 0.5) * currentWeapon.spread + (Math.random()-0.5)*0.02;
+      const angle = baseAngle + off;
+      bullets.push({
+        x: player.x + Math.cos(angle) * 28,
+        y: player.y + Math.sin(angle) * 28,
+        dx: Math.cos(angle) * currentWeapon.bulletSpeed,
+        dy: Math.sin(angle) * currentWeapon.bulletSpeed,
+        radius: 5,
+        damage: currentWeapon.damage
+      });
+    }
+  }
+}
+
+/* Primary fire (left click) */
+function onPrimaryFire(e){
+  // If weapon overlay open, don't shoot
+  if (isWeaponOpen) return;
+  fireWeapon();
+}
+
+/* Support auto fire while mouse held */
+function handleAutoFire() {
+  if (mouseDown && currentWeapon.auto && !isWeaponOpen) {
+    fireWeapon();
+  }
+}
+
+/* =========================
+   Collision & helpers
+   ========================= */
+function circleRectCollision(x, y, r, rect) {
+  const nearestX = Math.max(rect.x, Math.min(x, rect.x + rect.w));
+  const nearestY = Math.max(rect.y, Math.min(y, rect.y + rect.h));
+  const dx = x - nearestX;
+  const dy = y - nearestY;
+  return (dx * dx + dy * dy) < (r * r);
+}
+function checkCollision(x, y, radius) {
+  for (const w of walls) {
+    if (circleRectCollision(x, y, radius, w)) return true;
+  }
+  return false;
+}
+function drawWalls() {
+  ctx.fillStyle = '#555';
+  for (const wall of walls) ctx.fillRect(wall.x, wall.y, wall.w, wall.h);
+}
+
+/* Line intersection for ray/vision */
+function lineIntersect(p0, p1, p2, p3) {
+  const s1x = p1.x - p0.x, s1y = p1.y - p0.y;
+  const s2x = p3.x - p2.x, s2y = p3.y - p2.y;
+  const denom = (-s2x * s1y + s1x * s2y);
+  if (denom === 0) return null;
+  const s = (-s1y * (p0.x - p2.x) + s1x * (p0.y - p2.y)) / denom;
+  const t = ( s2x * (p0.y - p2.y) - s2y * (p0.x - p2.x)) / denom;
+  if (s >= 0 && s <= 1 && t >= 0 && t <= 1) {
+    return { x: p0.x + (t * s1x), y: p0.y + (t * s1y) };
+  }
+  return null;
+}
+
+/* =========================
+   Game objects (simple enemy example)
+   ========================= */
+const enemies = [];
+function spawnEnemy() {
+  let tries = 0;
+  while (tries++ < 80) {
+    const x = Math.random() * (canvas.width-100) + 50;
+    const y = Math.random() * (canvas.height-100) + 50;
+    if (Math.hypot(x-player.x,y-player.y) < 140) continue;
+    if (checkCollision(x,y,16)) continue;
+    enemies.push({ x, y, r: 16, hp: 2, speed: 1.2 });
+    return;
+  }
+}
+for (let i=0;i<5;i++) spawnEnemy();
+
+/* =========================
+   Weapon overlay toggle
+   ========================= */
+let isWeaponOpen = false;
+function openWeaponOverlay(){ 
+  isWeaponOpen = true; 
+  weaponOverlay.style.display = 'block';
+  weaponOverlay.setAttribute('aria-hidden','false');
+  // show overlay on top and focus
+}
+function closeWeaponOverlay(){ 
+  isWeaponOpen = false; 
+  weaponOverlay.style.display = 'none';
+  weaponOverlay.setAttribute('aria-hidden','true');
+}
+weaponBtn.addEventListener('click', () => {
+  if (isWeaponOpen) closeWeaponOverlay(); else openWeaponOverlay();
+});
+closeWeaponsBtn.addEventListener('click', () => closeWeaponOverlay());
+
+document.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 'e') {
+    if (isWeaponOpen) closeWeaponOverlay(); else { buildWeaponUI(); openWeaponOverlay(); }
+  }
+});
+
+/* =========================
+   Game loop
+   ========================= */
+let score = 0;
+function gameLoop() {
+  // If overlay is open, pause updates but still render so user sees scene.
+  const paused = isWeaponOpen;
+
+  // Update (if not paused)
+  if(!paused){
+    // Player movement
+    let nx = player.x, ny = player.y;
+    if (keys['w']) ny -= player.speed;
+    if (keys['s']) ny += player.speed;
+    if (keys['a']) nx -= player.speed;
+    if (keys['d']) nx += player.speed;
+    if (!checkCollision(nx, player.y, player.radius)) player.x = nx;
+    if (!checkCollision(player.x, ny, player.radius)) player.y = ny;
+
+    // Handle auto weapons
+    handleAutoFire();
+
+    // Update bullets
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i];
+      b.x += b.dx; b.y += b.dy;
+      if (b.x < -20 || b.x > canvas.width + 20 || b.y < -20 || b.y > canvas.height + 20) {
+        bullets.splice(i,1); continue;
+      }
+      // bullet-wall collision
+      if (walls.some(w => circleRectCollision(b.x, b.y, b.radius, w))) {
+        bullets.splice(i,1); continue;
+      }
+      // enemy hit
+      for (let j = enemies.length - 1; j >= 0; j--) {
+        const e = enemies[j];
+        if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + b.radius) {
+          e.hp -= b.damage;
+          bullets.splice(i,1);
+          if (e.hp <= 0) {
+            enemies.splice(j,1);
+            score++;
+            scoreEl.textContent = score;
+            setTimeout(spawnEnemy, 700 + Math.random()*1000);
+          }
+          break;
+        }
+      }
+    }
+
+    // update enemies (simple seek and wall collision)
+    for (const e of enemies) {
+      const ang = Math.atan2(player.y - e.y, player.x - e.x);
+      let ex = e.x + Math.cos(ang) * e.speed;
+      let ey = e.y + Math.sin(ang) * e.speed;
+      if (!checkCollision(ex, e.y, e.r)) e.x = ex;
+      if (!checkCollision(e.x, ey, e.r)) e.y = ey;
+    }
+  }
+
+  // DRAW
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // background
+  ctx.fillStyle = '#222';
+  ctx.fillRect(0,0,canvas.width,canvas.height);
+
+  // walls
+  drawWalls();
+
+  // enemies
+  for(const e of enemies){
+    ctx.fillStyle = 'crimson';
+    ctx.beginPath(); ctx.arc(e.x,e.y,e.r,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.arc(e.x-5, e.y-3, 3, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(e.x+5, e.y-3, 3, 0, Math.PI*2); ctx.fill();
+  }
+
+  // bullets
+  for(const b of bullets){
+    ctx.fillStyle = 'yellow';
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.radius,0,Math.PI*2); ctx.fill();
+  }
+
+  // player
+  const playerAng = Math.atan2(mouseY - player.y, mouseX - player.x);
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  ctx.rotate(playerAng);
+  ctx.fillStyle = '#2ecc71';
+  ctx.fillRect(-10,-15,20,30);
+  ctx.fillStyle = '#888';
+  ctx.fillRect(10,-4,26,8);
+  ctx.restore();
+
+  // FOG OF WAR + LIGHT CONE (trail memory)
+  // gentle fade
+  fogCtx.fillStyle = 'rgba(0, 0, 0, 0.04)';
+  fogCtx.fillRect(0,0,fogCanvas.width,fogCanvas.height);
+
+  const maxLength = 1000;
+  const coneSpread = Math.PI / 6; // 30 degrees
+  const coneAngle = Math.atan2(mouseY - player.y, mouseX - player.x);
+  const rayCount = 60;
+  const conePoints = [];
+
+  for (let i = -coneSpread / 2; i <= coneSpread / 2; i += coneSpread / rayCount) {
+    const rayAngle = coneAngle + i;
+    let endX = player.x + Math.cos(rayAngle) * maxLength;
+    let endY = player.y + Math.sin(rayAngle) * maxLength;
+
+    // check wall intersections
+    for (const w of walls) {
+      const edges = [
+        [{ x: w.x, y: w.y }, { x: w.x + w.w, y: w.y }],
+        [{ x: w.x + w.w, y: w.y }, { x: w.x + w.w, y: w.y + w.h }],
+        [{ x: w.x + w.w, y: w.y + w.h }, { x: w.x, y: w.y + w.h }],
+        [{ x: w.x, y: w.y + w.h }, { x: w.x, y: w.y }]
+      ];
+      for (const [a, b] of edges) {
+        const hit = lineIntersect({ x: player.x, y: player.y }, { x: endX, y: endY }, a, b);
+        if (hit) {
+          const dist = Math.hypot(hit.x - player.x, hit.y - player.y);
+          const curDist = Math.hypot(endX - player.x, endY - player.y);
+          if (dist < curDist) {
+            endX = hit.x;
+            endY = hit.y;
+          }
+        }
+      }
+    }
+    conePoints.push({ x: endX, y: endY });
+  }
+
+  // carve cone
+  fogCtx.globalCompositeOperation = 'destination-out';
+  fogCtx.beginPath();
+  fogCtx.moveTo(player.x, player.y);
+  for (const p of conePoints) fogCtx.lineTo(p.x, p.y);
+  fogCtx.closePath();
+  fogCtx.fillStyle = 'rgba(255,255,255,0.9)';
+  fogCtx.fill();
+  fogCtx.globalCompositeOperation = 'source-over';
+
+  // gradient overlay to darken edges of cone
+  const gradient = fogCtx.createRadialGradient(player.x, player.y, 0, player.x, player.y, maxLength);
+  gradient.addColorStop(0, 'rgba(0,0,0,0)');
+  gradient.addColorStop(0.4, 'rgba(0,0,0,0.08)');
+  gradient.addColorStop(1, 'rgba(0,0,0,0.9)');
+  fogCtx.fillStyle = gradient;
+  fogCtx.fillRect(0,0,fogCanvas.width,fogCanvas.height);
+
+  // draw fog to main canvas
+  ctx.drawImage(fogCanvas,0,0);
+
+  // if weapon overlay open, draw a soft dim layer (it also shows DOM overlay)
+  if (isWeaponOpen) {
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+  }
+
+  requestAnimationFrame(gameLoop);
+}
+
+/* =========================
+   Start game + wiring
+   ========================= */
+startBtn.addEventListener('click', () => {
+  menu.style.display = 'none';
+  canvas.style.display = 'block';
+  hud.style.display = 'flex';
+  helpNote.style.display = 'block';
+  resizeAll();
+  attachMouse();
+  buildWeaponUI();
+  selectWeapon('pistol');
+  requestAnimationFrame(gameLoop);
+});
+
+/* Make weapon UI interactive on click (equip) */
+weaponListEl.addEventListener('click', (e) => {
+  const card = e.target.closest('.weaponCard');
+  if (card) selectWeapon(card.dataset.weapon);
+});
+
+/* close overlay on ESC too */
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && isWeaponOpen) closeWeaponOverlay();
+});
+
+/* ensure the overlay builder shows correct active state */
+buildWeaponUI();
+selectWeapon('pistol');
+</script>
+</body>
+</html>
