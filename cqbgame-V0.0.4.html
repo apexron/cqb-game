@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>CQB Shooter — Weapon Menu (Press E) + Upgrades (U)</title>
+<style>
+  :root{
+    --bg:#111;
+    --panel:rgba(0,0,0,0.6);
+    --accent:#0f0;
+  }
+  html,body{height:100%;margin:0;background:var(--bg);color:#fff;font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  canvas{display:block}
+  #menu {
+    position: absolute;
+    top:0;left:0;width:100%;height:100%;
+    display:flex;flex-direction:column;justify-content:center;align-items:center;
+    background: radial-gradient(circle, #111 40%, #000 100%);
+    z-index: 30;
+  }
+  #menu h1{font-size:48px;margin:0 0 20px;color:var(--accent);text-shadow:0 0 8px var(--accent)}
+  #menu button{background:var(--accent);border:none;color:#000;padding:12px 32px;font-size:18px;border-radius:10px;cursor:pointer}
+  #hud{
+    position:absolute; left:12px; top:12px; z-index:20;
+    background:var(--panel); padding:8px 10px; border-radius:8px;
+    display:flex;gap:12px; align-items:center;
+  }
+  #weaponBtn, #upgradeBtn{
+    background:transparent; border:1px solid rgba(255,255,255,0.06); color:#fff; padding:6px 10px; border-radius:6px; cursor:pointer;
+  }
+
+  /* Weapon popup */
+  .popupOverlay{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:520px; max-width:92%; background:linear-gradient(#111,#0b0b0b);
+    border-radius:12px; padding:18px; box-shadow:0 8px 30px rgba(0,0,0,0.7);
+    z-index:40; display:none;
+  }
+  .popupOverlay h2{margin:0 0 12px;color:var(--accent)}
+  .weaponList{display:flex; gap:10px; flex-wrap:wrap}
+  .weaponCard{
+    flex:1 1 150px; min-width:140px;
+    background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; cursor:pointer;
+    border:2px solid transparent; transition:transform .08s, border-color .12s, background .12s;
+  }
+  .weaponCard:hover{transform:translateY(-4px); background: rgba(255,255,255,0.04)}
+  .weaponCard.active{border-color:var(--accent); box-shadow:0 6px 18px rgba(0,255,0,0.06)}
+  .weaponName{font-weight:700;margin-bottom:6px}
+  .weaponStat{font-size:13px;color:#cfcfcf;margin:2px 0}
+  #closeWeapons{margin-top:12px; background:var(--accent); border:none; padding:10px 14px; color:#000; border-radius:8px; cursor:pointer}
+
+  /* Upgrade UI */
+  .upgradeRow{display:flex;align-items:center;gap:10px;padding:8px;background:rgba(255,255,255,0.02);border-radius:8px;margin-bottom:8px}
+  .upgradeTitle{flex:1;font-weight:700}
+  .upgradeBars{display:flex;gap:4px}
+  .bar{width:18px;height:8px;border-radius:3px;background:rgba(255,255,255,0.08)}
+  .bar.active{background:linear-gradient(90deg,#47d36b,#0f0)}
+  .upgradeBtn{background:var(--accent);border:none;padding:6px 10px;border-radius:6px;color:#000;cursor:pointer}
+  .upgradeCost{font-size:13px;color:#ddd}
+
+  /* small help note */
+  #helpNote{position:absolute; right:12px; top:12px; font-size:13px; color:#ddd; opacity:0.9}
+
+  /* HUD ammo + reload */
+  #ammoDisplay { font-weight:700; margin-left:10px; font-family:monospace; }
+  #reloadBar {
+    position:absolute; left:12px; top:62px; z-index:25;
+    width:160px; height:10px; background:rgba(255,255,255,0.06); border-radius:6px; overflow:hidden; display:none;
+  }
+  #reloadBarInner { height:100%; width:0%; background:linear-gradient(90deg, rgba(0,255,0,0.75), rgba(0,200,0,0.75)); transition:width 0.05s linear; }
+
+</style>
+</head>
+<body>
+  <div id="menu">
+    <h1>CQB SHOOTER</h1>
+    <button id="startBtn">Start Game</button>
+  </div>
+
+  <div id="hud" style="display:none">
+    <div>Score: <span id="score">0</span></div>
+    <div id="currentWeapon" style="font-weight:700">Weapon: Pistol</div>
+    <div id="ammoDisplay">12 / 12</div>
+    <button id="weaponBtn" title="Open weapon menu (E)">Weapons (E)</button>
+    <button id="upgradeBtn" title="Open upgrades (U)">Upgrades (U)</button>
+  </div>
+
+  <div id="reloadBar"><div id="reloadBarInner"></div></div>
+
+  <div id="helpNote" style="display:none">Move: WASD • Aim: Mouse • Shoot: Click • Open weapons: E • Upgrades: U • Reload: R</div>
+
+  <canvas id="gameCanvas" style="display:none"></canvas>
+
+  <!-- Weapon selection overlay (in-game) -->
+  <div id="weaponOverlay" class="popupOverlay" aria-hidden="true">
+    <h2>Choose Your Weapon</h2>
+    <div class="weaponList" id="weaponList"></div>
+    <button id="closeWeapons">Equip & Close (E)</button>
+  </div>
+
+  <!-- Upgrades overlay (matches weapon menu style) -->
+  <div id="upgradeOverlay" class="popupOverlay" aria-hidden="true">
+    <h2>Upgrade — <span id="upgradeWeaponName">Pistol</span></h2>
+    <div id="upgradeList"></div>
+    <button id="closeUpgrades">Close (U)</button>
+  </div>
+
+<script>
+/* =========================
+   Setup + Globals
+   ========================= */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+function resizeAll(){
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  fogCanvas.width = canvas.width;
+  fogCanvas.height = canvas.height;
+}
+window.addEventListener('resize', resizeAll);
+
+const fogCanvas = document.createElement('canvas');
+const fogCtx = fogCanvas.getContext('2d');
+
+/* Player */
+const player = { x: 400, y: 300, radius: 20, speed: 4 };
+
+/* Bullets */
+const bullets = [];
+const explosions = [];
+
+/* Walls */
+const walls = [
+  { x: 200, y: 150, w: 300, h: 20 },
+  { x: 600, y: 400, w: 20, h: 300 },
+  { x: 400, y: 600, w: 300, h: 20 },
+  { x: 800, y: 200, w: 20, h: 300 }
+];
+
+/* Basic input */
+const keys = {};
+let mouseX = 0, mouseY = 0, mouseDown = false;
+document.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+document.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+document.addEventListener('mousedown', () => mouseDown = true);
+document.addEventListener('mouseup', () => mouseDown = false);
+
+/* HUD + UI elements */
+const hud = document.getElementById('hud');
+const startBtn = document.getElementById('startBtn');
+const menu = document.getElementById('menu');
+const scoreEl = document.getElementById('score');
+const weaponBtn = document.getElementById('weaponBtn');
+const upgradeBtn = document.getElementById('upgradeBtn');
+const weaponOverlay = document.getElementById('weaponOverlay');
+const weaponListEl = document.getElementById('weaponList');
+const closeWeaponsBtn = document.getElementById('closeWeapons');
+const upgradeOverlay = document.getElementById('upgradeOverlay');
+const upgradeListEl = document.getElementById('upgradeList');
+const closeUpgradesBtn = document.getElementById('closeUpgrades');
+const currentWeaponLabel = document.getElementById('currentWeapon');
+const helpNote = document.getElementById('helpNote');
+const ammoDisplay = document.getElementById('ammoDisplay');
+const reloadBar = document.getElementById('reloadBar');
+const reloadBarInner = document.getElementById('reloadBarInner');
+const upgradeWeaponName = document.getElementById('upgradeWeaponName');
+
+/* Mouse tracking inside canvas (will be added after start) */
+function attachMouse() {
+  canvas.addEventListener('mousemove', e => {
+    const rect = canvas.getBoundingClientRect();
+    mouseX = e.clientX - rect.left;
+    mouseY = e.clientY - rect.top;
+  });
+  canvas.addEventListener('click', onPrimaryFire);
+}
+
+/* =========================
+   Weapons (with magazine + reloadTime + base stats)
+   ========================= */
+const weapons = {
+  pistol: {
+    id: 'pistol', name: 'Pistol', base: { damage: 1, bulletSpeed: 12, fireRate: 250, spread: 0 },
+    bulletsPerShot: 1, auto: false,
+    magazine: 12, reloadTime: 900
+  },
+  shotgun: {
+    id: 'shotgun', name: 'Shotgun', base: { damage: 1, bulletSpeed: 11, fireRate: 800, spread: 0.6 },
+    bulletsPerShot: 6, auto: false,
+    magazine: 6, reloadTime: 1200
+  },
+  smg: {
+    id: 'smg', name: 'SMG', base: { damage: 1, bulletSpeed: 14, fireRate: 80, spread: 0.06 },
+    bulletsPerShot: 1, auto: true,
+    magazine: 30, reloadTime: 1600
+  },
+  ar: {
+    id: 'ar', name: 'Assault Rifle', base: { damage: 2, bulletSpeed: 16, fireRate: 120, spread: 0.04 },
+    bulletsPerShot: 1, auto: true,
+    magazine: 30, reloadTime: 1400
+  },
+  sniper: {
+    id: 'sniper', name: 'Sniper', base: { damage: 8, bulletSpeed: 38, fireRate: 1200, spread: 0.002 },
+    bulletsPerShot: 1, auto: false, special: 'piercing',
+    magazine: 5, reloadTime: 2000
+  },
+  lmg: {
+    id: 'lmg', name: 'LMG', base: { damage: 1.2, bulletSpeed: 13, fireRate: 60, spread: 0.09 },
+    bulletsPerShot: 1, auto: true, magazine: 80, reloadTime: 3000
+  },
+  rocket: {
+    id: 'rocket', name: 'Rocket Launcher', base: { damage: 6, bulletSpeed: 8, fireRate: 1200, spread: 0.01 },
+    bulletsPerShot: 1, auto: false, explosive: true, explosionRadius: 80, magazine: 1, reloadTime: 1800
+  }
+};
+
+/* Prepare upgrade tracking and derived stats */
+for (const k in weapons) {
+  const w = weapons[k];
+  // store base values for reference
+  w.upgrades = {
+    damage: 1, // levels 1..5
+    fireRate: 1,
+    reload: 1,
+    ammo: 1
+  };
+  w.maxUpgrade = 5;
+  w.currentAmmo = w.magazine;
+  // compute derived from base + upgrades
+  function applyUpgrades() {
+    // damage +20% per level above 1
+    const dmgLevel = w.upgrades.damage;
+    w.damage = w.base.damage * (1 + 0.2 * (dmgLevel - 1));
+    // fireRate reduced by 10% per level above 1 (faster)
+    const frLevel = w.upgrades.fireRate;
+    w.fireRate = Math.max(20, Math.round(w.base.fireRate * Math.pow(0.9, frLevel - 1)));
+    // reloadTime reduced by 10% per level above 1 (faster)
+    const rlLevel = w.upgrades.reload;
+    w.reloadTime = Math.max(150, Math.round((w.reloadTime || w.reloadTime) * Math.pow(0.9, rlLevel - 1)) || Math.round(w.reloadTime * Math.pow(0.9, rlLevel - 1)));
+    // ammo increased by 20% per level above 1
+    const amLevel = w.upgrades.ammo;
+    const newMag = Math.max(1, Math.round(w.magazine * (1 + 0.2 * (amLevel - 1))));
+    // if magazine increased, adjust currentAmmo proportionally (do not exceed newMag)
+    const prevMag = w.magazine;
+    w.magazine = newMag;
+    if (w.currentAmmo > newMag) w.currentAmmo = newMag;
+  }
+  // bind for later calls
+  w.applyUpgrades = applyUpgrades;
+}
+
+// After defining, call applyUpgrades once to set derived values correctly
+for (const k in weapons) weapons[k].applyUpgrades();
+
+let currentWeapon = weapons.pistol;
+let lastShotTime = 0;
+
+/* track ammo & reload state */
+let isReloading = false;
+let reloadEndTime = 0;
+let reloadWeaponId = null;
+
+/* Build weapon overlay UI */
+function buildWeaponUI(){
+  weaponListEl.innerHTML = '';
+  for(const key in weapons){
+    const w = weapons[key];
+    const card = document.createElement('div');
+    card.className = 'weaponCard' + (w.id === currentWeapon.id ? ' active' : '');
+    card.dataset.weapon = w.id;
+    const extras = [];
+    if (w.auto) extras.push('Auto'); else extras.push('Semi-auto');
+    if (w.explosive) extras.push('Explosive');
+    if (w.special === 'piercing') extras.push('Piercing');
+    card.innerHTML = `
+      <div class="weaponName">${w.name}</div>
+      <div class="weaponStat">Fire rate: ${w.fireRate} ms</div>
+      <div class="weaponStat">Bullets/shot: ${w.bulletsPerShot}</div>
+      <div class="weaponStat">Speed: ${w.base.bulletSpeed}</div>
+      <div class="weaponStat">Spread: ${w.base.spread}</div>
+      <div style="margin-top:6px;color:#bdbdbd;font-size:12px">${extras.join(' • ')}</div>
+      <div style="margin-top:6px;color:#bdbdbd;font-size:12px">Mag: ${w.magazine}</div>
+    `;
+    card.addEventListener('click', () => {
+      selectWeapon(w.id);
+    });
+    weaponListEl.appendChild(card);
+  }
+}
+function selectWeapon(id){
+  if(!weapons[id]) return;
+  currentWeapon = weapons[id];
+  lastShotTime = 0;
+  currentWeaponLabel.textContent = `Weapon: ${currentWeapon.name}`;
+  updateAmmoDisplay();
+  // refresh UI highlight
+  Array.from(document.querySelectorAll('.weaponCard')).forEach(c => c.classList.toggle('active', c.dataset.weapon === id));
+}
+
+/* =========================
+   Upgrade system
+   ========================= */
+let isUpgradeOpen = false;
+function openUpgradeOverlay(){
+  isUpgradeOpen = true;
+  upgradeOverlay.style.display = 'block';
+  upgradeOverlay.setAttribute('aria-hidden','false');
+  buildUpgradeUI();
+}
+function closeUpgradeOverlay(){
+  isUpgradeOpen = false;
+  upgradeOverlay.style.display = 'none';
+  upgradeOverlay.setAttribute('aria-hidden','true');
+}
+upgradeBtn.addEventListener('click', () => { if (isUpgradeOpen) closeUpgradeOverlay(); else openUpgradeOverlay(); });
+closeUpgradesBtn.addEventListener('click', () => closeUpgradeOverlay());
+
+actionFlashTimers = {}; // for flashing insufficient funds
+
+function buildUpgradeUI(){
+  upgradeListEl.innerHTML = '';
+  const w = currentWeapon;
+  upgradeWeaponName.textContent = w.name;
+  const stats = [
+    { key: 'damage', title: 'Damage' },
+    { key: 'fireRate', title: 'Fire Rate' },
+    { key: 'reload', title: 'Reload Speed' },
+    { key: 'ammo', title: 'Ammo Capacity' }
+  ];
+  for (const s of stats) {
+    const lvl = w.upgrades[s.key] || 1;
+    const row = document.createElement('div');
+    row.className = 'upgradeRow';
+    const title = document.createElement('div'); title.className = 'upgradeTitle'; title.textContent = s.title;
+    const bars = document.createElement('div'); bars.className = 'upgradeBars';
+    for (let i=1;i<=w.maxUpgrade;i++){
+      const b = document.createElement('div'); b.className = 'bar' + (i<=lvl ? ' active' : '');
+      bars.appendChild(b);
+    }
+    const cost = 100 * lvl; // next level cost
+    const costEl = document.createElement('div'); costEl.className = 'upgradeCost'; costEl.textContent = lvl>=w.maxUpgrade ? 'MAX' : `Cost: ${cost}`;
+    const btn = document.createElement('button'); btn.className = 'upgradeBtn'; btn.textContent = lvl>=w.maxUpgrade ? 'MAX' : 'Upgrade';
+    btn.disabled = (lvl>=w.maxUpgrade);
+    btn.addEventListener('click', () => {
+      attemptUpgrade(w.id, s.key);
+    });
+    row.appendChild(title);
+    row.appendChild(bars);
+    row.appendChild(costEl);
+    row.appendChild(btn);
+    upgradeListEl.appendChild(row);
+  }
+}
+
+function attemptUpgrade(weaponId, statKey){
+  const w = weapons[weaponId];
+  const lvl = w.upgrades[statKey] || 1;
+  if (lvl >= w.maxUpgrade) return;
+  const cost = 100 * lvl;
+  if (score < cost) {
+    // flash cost text or overlay briefly
+    flashInsufficient();
+    return;
+  }
+  // spend points
+  score -= cost; scoreEl.textContent = score;
+  w.upgrades[statKey] = lvl + 1;
+  // apply upgrades to stats
+  // Important: recompute derived values from base using upgrade levels
+  // Damage
+  const dmgLevel = w.upgrades.damage;
+  w.damage = w.base.damage * (1 + 0.2 * (dmgLevel - 1));
+  // Fire rate
+  const frLevel = w.upgrades.fireRate;
+  w.fireRate = Math.max(20, Math.round(w.base.fireRate * Math.pow(0.9, frLevel - 1)));
+  // Reload
+  const rlLevel = w.upgrades.reload;
+  w.reloadTime = Math.max(100, Math.round((w.reloadTime || w.reloadTime) * Math.pow(0.9, rlLevel - 1)) || Math.round(w.reloadTime * Math.pow(0.9, rlLevel - 1)));
+  // Ammo
+  const amLevel = w.upgrades.ammo;
+  const newMag = Math.max(1, Math.round((w.magazine / Math.max(1, 1 + 0.2 * (amLevel - 2))) * (1 + 0.2 * (amLevel - 1))));
+  // simpler: base magazine * (1 + 0.2*(level-1)) using the original base magazine
+  const baseMag = Math.round(w.magazine / (1 + 0.2 * (amLevel - 2) || 1));
+  const computedMag = Math.max(1, Math.round(baseMag * (1 + 0.2 * (amLevel - 1))));
+  w.magazine = computedMag;
+  if (w.currentAmmo > w.magazine) w.currentAmmo = w.magazine;
+
+  // ensure weapon.applyUpgrades remains in sync
+  if (w.applyUpgrades) w.applyUpgrades();
+
+  // update UI
+  updateAmmoDisplay();
+  buildUpgradeUI();
+}
+
+function flashInsufficient(){
+  // briefly flash the upgrade overlay background
+  upgradeOverlay.style.boxShadow = '0 8px 40px rgba(255,0,0,0.6)';
+  setTimeout(()=> upgradeOverlay.style.boxShadow = '0 8px 30px rgba(0,0,0,0.7)', 360);
+}
+
+/* =========================
+   Reload logic
+   ========================= */
+function startReload(force=false){
+  if (isReloading) return;
+  if (!currentWeapon) return;
+  if (currentWeapon.currentAmmo >= currentWeapon.magazine && !force) return;
+  // start reload
+  isReloading = true;
+  reloadWeaponId = currentWeapon.id;
+  reloadEndTime = performance.now() + currentWeapon.reloadTime;
+  reloadBar.style.display = 'block';
+}
+function completeReload(){
+  if (!isReloading) return;
+  const w = weapons[reloadWeaponId];
+  if (w) {
+    w.currentAmmo = w.magazine;
+  }
+  if (currentWeapon && currentWeapon.id === reloadWeaponId) updateAmmoDisplay();
+  isReloading = false;
+  reloadWeaponId = null;
+  reloadBar.style.display = 'none';
+  reloadBarInner.style.width = '0%';
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 'r') {
+    startReload(true);
+  }
+});
+
+/* =========================
+   Fire handling (consumes ammo)
+   ========================= */
+function fireWeapon() {
+  const now = performance.now();
+  if (now - lastShotTime < currentWeapon.fireRate) return;
+  if (isReloading) return; // can't fire while reloading
+  if (currentWeapon.currentAmmo <= 0) { startReload(true); return; }
+
+  lastShotTime = now;
+  currentWeapon.currentAmmo = Math.max(0, currentWeapon.currentAmmo - 1);
+  updateAmmoDisplay();
+
+  const baseAngle = Math.atan2(mouseY - player.y, mouseX - player.x);
+  const count = currentWeapon.bulletsPerShot;
+  if (count === 1) {
+    const angle = baseAngle + (Math.random() - 0.5) * (currentWeapon.base.spread || 0);
+    const b = {
+      x: player.x + Math.cos(angle) * 28,
+      y: player.y + Math.sin(angle) * 28,
+      dx: Math.cos(angle) * (currentWeapon.base.bulletSpeed || currentWeapon.bulletSpeed || 12),
+      dy: Math.sin(angle) * (currentWeapon.base.bulletSpeed || currentWeapon.bulletSpeed || 12),
+      radius: 5,
+      damage: currentWeapon.damage || currentWeapon.base.damage
+    };
+    if (currentWeapon.id === 'rocket') { b.radius = 8; b.explosive = true; b.explosionRadius = currentWeapon.explosionRadius; }
+    if (currentWeapon.special === 'piercing') b.piercing = true;
+    bullets.push(b);
+  } else {
+    for (let i=0;i<count;i++){
+      const t = (count===1) ? 0.5 : i/(count-1);
+      const off = (t - 0.5) * (currentWeapon.base.spread || 0) + (Math.random()-0.5)*0.02;
+      const angle = baseAngle + off;
+      bullets.push({
+        x: player.x + Math.cos(angle) * 28,
+        y: player.y + Math.sin(angle) * 28,
+        dx: Math.cos(angle) * (currentWeapon.base.bulletSpeed || currentWeapon.bulletSpeed || 12),
+        dy: Math.sin(angle) * (currentWeapon.base.bulletSpeed || currentWeapon.bulletSpeed || 12),
+        radius: 5,
+        damage: currentWeapon.damage || currentWeapon.base.damage
+      });
+    }
+  }
+
+  if (currentWeapon.currentAmmo <= 0) {
+    setTimeout(() => { startReload(true); }, 150);
+  }
+}
+
+function onPrimaryFire(e){ if (isWeaponOpen || isUpgradeOpen) return; fireWeapon(); }
+function handleAutoFire() { if (mouseDown && currentWeapon.auto && !isWeaponOpen && !isUpgradeOpen) { fireWeapon(); } }
+
+/* =========================
+   Collision & helpers (unchanged)
+   ========================= */
+function circleRectCollision(x, y, r, rect) {
+  const nearestX = Math.max(rect.x, Math.min(x, rect.x + rect.w));
+  const nearestY = Math.max(rect.y, Math.min(y, rect.y + rect.h));
+  const dx = x - nearestX; const dy = y - nearestY; return (dx*dx+dy*dy) < (r*r);
+}
+function checkCollision(x, y, radius) { for (const w of walls) if (circleRectCollision(x,y,radius,w)) return true; return false; }
+function drawWalls() { ctx.fillStyle = '#555'; for (const wall of walls) ctx.fillRect(wall.x, wall.y, wall.w, wall.h); }
+function lineIntersect(p0, p1, p2, p3) { const s1x = p1.x - p0.x, s1y = p1.y - p0.y; const s2x = p3.x - p2.x, s2y = p3.y - p2.y; const denom = (-s2x * s1y + s1x * s2y); if (denom === 0) return null; const s = (-s1y * (p0.x - p2.x) + s1x * (p0.y - p2.y)) / denom; const t = ( s2x * (p0.y - p2.y) - s2y * (p0.x - p2.x)) / denom; if (s >= 0 && s <= 1 && t >= 0 && t <= 1) return { x: p0.x + (t * s1x), y: p0.y + (t * s1y) }; return null; }
+
+/* =========================
+   Game objects (enemies) - unchanged
+   ========================= */
+const enemies = [];
+function spawnEnemy() {
+  let tries = 0;
+  while (tries++ < 80) {
+    const x = Math.random() * (canvas.width-100) + 50;
+    const y = Math.random() * (canvas.height-100) + 50;
+    if (Math.hypot(x-player.x,y-player.y) < 140) continue;
+    if (checkCollision(x,y,16)) continue;
+    enemies.push({ x, y, r: 16, hp: 2, speed: 1.2 });
+    return;
+  }
+}
+for (let i=0;i<5;i++) spawnEnemy();
+
+/* =========================
+   Weapon overlay toggle (unchanged)
+   ========================= */
+let isWeaponOpen = false;
+function openWeaponOverlay(){ isWeaponOpen = true; weaponOverlay.style.display = 'block'; weaponOverlay.setAttribute('aria-hidden','false'); }
+function closeWeaponOverlay(){ isWeaponOpen = false; weaponOverlay.style.display = 'none'; weaponOverlay.setAttribute('aria-hidden','true'); }
+weaponBtn.addEventListener('click', () => { if (isWeaponOpen) closeWeaponOverlay(); else { buildWeaponUI(); openWeaponOverlay(); } });
+closeWeaponsBtn.addEventListener('click', () => closeWeaponOverlay());
+
+document.addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 'e') {
+    if (isWeaponOpen) closeWeaponOverlay(); else { buildWeaponUI(); openWeaponOverlay(); }
+  }
+  if (e.key.toLowerCase() === 'u') {
+    if (isUpgradeOpen) closeUpgradeOverlay(); else openUpgradeOverlay();
+  }
+  if (e.key === 'Escape') { if (isWeaponOpen) closeWeaponOverlay(); if (isUpgradeOpen) closeUpgradeOverlay(); }
+});
+
+/* =========================
+   Game loop
+   ========================= */
+let score = 0;
+function updateAmmoDisplay(){ if (!currentWeapon) return; ammoDisplay.textContent = `${currentWeapon.currentAmmo} / ${currentWeapon.magazine}`; }
+
+/* reload animation helper (unchanged) */
+function drawReloadAnimation(progress) {
+  const magW = 14, magH = 24; const slide = 24; const eased = (Math.sin((progress - 0.5) * Math.PI) + 1) / 2; const offsetY = -10 + eased * slide; const magX = player.x + 16; const magY = player.y + offsetY; ctx.save(); ctx.translate(magX, magY); const wobble = Math.sin(progress * Math.PI * 4) * 0.08; ctx.rotate(wobble); ctx.fillStyle = '#222'; ctx.fillRect(-magW/2, -magH/2, magW, magH); ctx.strokeStyle = '#666'; ctx.lineWidth = 2; ctx.strokeRect(-magW/2, -magH/2, magW, magH); ctx.restore(); }
+
+function gameLoop() {
+  const paused = isWeaponOpen || isUpgradeOpen;
+  const now = performance.now();
+
+  if (isReloading) {
+    const remaining = Math.max(0, reloadEndTime - now);
+    const total = (weapons[reloadWeaponId] && weapons[reloadWeaponId].reloadTime) ? weapons[reloadWeaponId].reloadTime : 1000;
+    const prog = 1 - remaining / total; reloadBarInner.style.width = `${Math.min(100, Math.floor(prog * 100))}%`;
+    if (now >= reloadEndTime) completeReload();
+  }
+
+  if(!paused){
+    let nx = player.x, ny = player.y;
+    if (keys['w']) ny -= player.speed;
+    if (keys['s']) ny += player.speed;
+    if (keys['a']) nx -= player.speed;
+    if (keys['d']) nx += player.speed;
+    if (!checkCollision(nx, player.y, player.radius)) player.x = nx;
+    if (!checkCollision(player.x, ny, player.radius)) player.y = ny;
+    handleAutoFire();
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const b = bullets[i]; b.x += b.dx; b.y += b.dy;
+      if (b.x < -50 || b.x > canvas.width + 50 || b.y < -50 || b.y > canvas.height + 50) { if (b.explosive) createExplosion(b.x, b.y, b.explosionRadius || 60, b.damage); bullets.splice(i,1); continue; }
+      if (walls.some(w => circleRectCollision(b.x, b.y, b.radius, w))) { if (b.explosive) createExplosion(b.x, b.y, b.explosionRadius || 60, b.damage); bullets.splice(i,1); continue; }
+      for (let j = enemies.length - 1; j >= 0; j--) {
+        const e = enemies[j]; if (Math.hypot(e.x - b.x, e.y - b.y) < e.r + b.radius) {
+          e.hp -= b.damage; if (!b.piercing) bullets.splice(i,1);
+          if (e.hp <= 0) { enemies.splice(j,1); score++; scoreEl.textContent = score; setTimeout(spawnEnemy, 700 + Math.random()*1000); }
+          if (b.explosive) createExplosion(b.x, b.y, b.explosionRadius || 60, b.damage);
+          break;
+        }
+      }
+    }
+    for (let k = explosions.length - 1; k >= 0; k--) {
+      const ex = explosions[k]; ex.life -= 1; if (ex.life === ex.maxLife - 1) { for (let j = enemies.length - 1; j >= 0; j--) { const e = enemies[j]; const d = Math.hypot(e.x - ex.x, e.y - ex.y); if (d < ex.radius + e.r) { e.hp -= ex.damage; if (e.hp <= 0) { enemies.splice(j,1); score++; scoreEl.textContent = score; setTimeout(spawnEnemy, 700 + Math.random()*1000); } } } } if (ex.life <= 0) explosions.splice(k,1); }
+    for (const e of enemies) { const ang = Math.atan2(player.y - e.y, player.x - e.x); let ex = e.x + Math.cos(ang) * e.speed; let ey = e.y + Math.sin(ang) * e.speed; if (!checkCollision(ex, e.y, e.r)) e.x = ex; if (!checkCollision(e.x, ey, e.r)) e.y = ey; }
+  }
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.fillStyle = '#222'; ctx.fillRect(0,0,canvas.width,canvas.height);
+  drawWalls();
+  for(const e of enemies){ ctx.fillStyle = 'crimson'; ctx.beginPath(); ctx.arc(e.x,e.y,e.r,0,Math.PI*2); ctx.fill(); ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(e.x-5, e.y-3, 3, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.arc(e.x+5, e.y-3, 3, 0, Math.PI*2); ctx.fill(); }
+  for(const b of bullets){ ctx.fillStyle = b.explosive ? '#ff8c00' : 'yellow'; ctx.beginPath(); ctx.arc(b.x,b.y,b.radius,0,Math.PI*2); ctx.fill(); ctx.globalAlpha = 0.6; ctx.fillRect(b.x-1, b.y-1, 2, 2); ctx.globalAlpha = 1; }
+  for(const ex of explosions){ const t = 1 - (ex.life / ex.maxLife); const r = ex.radius * t; ctx.beginPath(); ctx.fillStyle = `rgba(255,160,0,${0.35*(1-t)})`; ctx.arc(ex.x, ex.y, r, 0, Math.PI*2); ctx.fill(); ctx.beginPath(); ctx.strokeStyle = `rgba(255,220,120,${0.6*(1-t)})`; ctx.lineWidth = 2; ctx.arc(ex.x, ex.y, r, 0, Math.PI*2); ctx.stroke(); }
+
+  const playerAng = Math.atan2(mouseY - player.y, mouseX - player.x);
+  ctx.save(); ctx.translate(player.x, player.y);
+  if (isReloading && reloadWeaponId === currentWeapon.id) { const now2 = performance.now(); const remaining = Math.max(0, reloadEndTime - now2); const total = currentWeapon.reloadTime; const prog = 1 - remaining / total; const tilt = Math.sin(prog * Math.PI * 3) * 0.15; ctx.rotate(playerAng + tilt); } else { ctx.rotate(playerAng); }
+  ctx.fillStyle = '#2ecc71'; ctx.fillRect(-10,-15,20,30); ctx.fillStyle = '#888'; ctx.fillRect(10,-4,26,8); ctx.restore();
+
+  // FOG OF WAR + LIGHT CONE
+  fogCtx.fillStyle = 'rgba(0, 0, 0, 0.04)'; fogCtx.fillRect(0,0,fogCanvas.width,fogCanvas.height);
+  const maxLength = 1000; const coneSpread = Math.PI / 6; const coneAngle = Math.atan2(mouseY - player.y, mouseX - player.x); const rayCount = 60; const conePoints = [];
+  for (let i = -coneSpread / 2; i <= coneSpread / 2; i += coneSpread / rayCount) {
+    const rayAngle = coneAngle + i; let endX = player.x + Math.cos(rayAngle) * maxLength; let endY = player.y + Math.sin(rayAngle) * maxLength;
+    for (const w of walls) {
+      const edges = [ [{ x: w.x, y: w.y }, { x: w.x + w.w, y: w.y }], [{ x: w.x + w.w, y: w.y }, { x: w.x + w.w, y: w.y + w.h }], [{ x: w.x + w.w, y: w.y + w.h }, { x: w.x, y: w.y + w.h }], [{ x: w.x, y: w.y + w.h }, { x: w.x, y: w.y }] ];
+      for (const [a, b] of edges) { const hit = lineIntersect({ x: player.x, y: player.y }, { x: endX, y: endY }, a, b); if (hit) { const dist = Math.hypot(hit.x - player.x, hit.y - player.y); const curDist = Math.hypot(endX - player.x, endY - player.y); if (dist < curDist) { endX = hit.x; endY = hit.y; } } }
+    }
+    conePoints.push({ x: endX, y: endY });
+  }
+  fogCtx.globalCompositeOperation = 'destination-out'; fogCtx.beginPath(); fogCtx.moveTo(player.x, player.y); for (const p of conePoints) fogCtx.lineTo(p.x, p.y); fogCtx.closePath(); fogCtx.fillStyle = 'rgba(255,255,255,0.9)'; fogCtx.fill(); fogCtx.globalCompositeOperation = 'source-over';
+  const gradient = fogCtx.createRadialGradient(player.x, player.y, 0, player.x, player.y, maxLength); gradient.addColorStop(0, 'rgba(0,0,0,0)'); gradient.addColorStop(0.4, 'rgba(0,0,0,0.08)'); gradient.addColorStop(1, 'rgba(0,0,0,0.9)'); fogCtx.fillStyle = gradient; fogCtx.fillRect(0,0,fogCanvas.width,fogCanvas.height);
+  ctx.drawImage(fogCanvas,0,0);
+
+  if (isReloading && reloadWeaponId === currentWeapon.id) { const now3 = performance.now(); const remaining2 = Math.max(0, reloadEndTime - now3); const total2 = currentWeapon.reloadTime; const prog2 = Math.min(1, Math.max(0, 1 - remaining2 / total2)); drawReloadAnimation(prog2); }
+  if (isWeaponOpen || isUpgradeOpen) { ctx.fillStyle = 'rgba(0,0,0,0.35)'; ctx.fillRect(0,0,canvas.width,canvas.height); }
+  requestAnimationFrame(gameLoop);
+}
+
+/* =========================
+   Start game + wiring
+   ========================= */
+startBtn.addEventListener('click', () => {
+  menu.style.display = 'none'; canvas.style.display = 'block'; hud.style.display = 'flex'; helpNote.style.display = 'block'; resizeAll(); attachMouse(); buildWeaponUI(); selectWeapon('pistol'); requestAnimationFrame(gameLoop);
+});
+
+weaponListEl.addEventListener('click', (e) => { const card = e.target.closest('.weaponCard'); if (card) selectWeapon(card.dataset.weapon); });
+
+closeWeaponsBtn.addEventListener('click', () => closeWeaponOverlay());
+
+function createExplosion(x,y,radius,damage){ explosions.push({ x, y, radius, damage: damage*2, life: 18, maxLife: 18 }); }
+
+/* init */
+buildWeaponUI(); selectWeapon('pistol'); updateAmmoDisplay();
+</script>
+</body>
+</html>
